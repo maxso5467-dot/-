@@ -151,7 +151,7 @@ function App() {
     if (type === 'voice') body.append('language', 'zh-CN')
     const data = await api(`/consultations/${currentSession.id}/messages/${type}`, { method: 'POST', body })
     if (type === 'image') {
-      setImageResult(await api(`/files/${data.fileId}/image-analysis`))
+      setImageResult(data.analysis || await api(`/files/${data.fileId}/image-analysis`))
     } else {
       setSpeechResult(await api(`/files/${data.fileId}/speech-result`))
     }
@@ -245,7 +245,7 @@ function App() {
             <strong>API</strong>
             <span>{API_BASE}</span>
           </div>
-          <div>
+          <div className={aiStatus?.realAiEnabled ? 'status-pill ok' : 'status-pill warn'}>
             <strong>AI</strong>
             <span>{aiStatus?.realAiEnabled ? `${aiStatus.provider} · ${aiStatus.model}` : '本地规则占位'}</span>
           </div>

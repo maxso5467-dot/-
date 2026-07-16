@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -345,12 +346,31 @@ app.post('/api/v1/consultations/:id/messages/image', auth, upload.single('file')
      VALUES (?, ?, 'image', ?, ?, ?, ?, 'analyzed')`,
     [req.user.id, req.params.id, file.originalname, `/uploads/${file.filename}`, file.mimetype, file.size]
   );
+  const imageStarted = Date.now();
+  const imageAiResult = await analyzeImageWithAi({
+    sessionId: req.params.id,
+    filePath: file.path,
+    mimeType: file.mimetype,
+    description: req.body.description || ''
+  });
   await query(
     `INSERT INTO image_analysis_results (file_id, image_category, quality_score, findings, confidence, safety_note)
-     VALUES (?, 'skin', 0.850, '已收到图片。当前演示服务记录图片并生成基础安全提示，正式版本应接入视觉模型。', 0.650, '图片分析仅作辅助，不能替代医生面诊。')`,
-    [result.insertId]
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      result.insertId,
+      imageAiResult.imageCategory,
+      imageAiResult.qualityScore,
+      imageAiResult.findings,
+      imageAiResult.confidence,
+      imageAiResult.safetyNote
+    ]
   );
-  res.status(201).json(ok({ fileId: result.insertId }));
+  await query(
+    `INSERT INTO model_call_logs (session_id, provider, model_name, capability, latency_ms, success, error_message)
+     VALUES (?, ?, ?, 'vision', ?, ?, ?)`,
+    [req.params.id, imageAiResult.provider, imageAiResult.model || 'none', Date.now() - imageStarted, imageAiResult.success, imageAiResult.error || null]
+  );
+  res.status(201).json(ok({ fileId: result.insertId, analysis: imageAiResult }));
 }));
 
 app.post('/api/v1/consultations/:id/messages/voice', auth, upload.single('file'), asyncRoute(async (req, res) => {
@@ -591,6 +611,113 @@ function extractResponseText(data) {
     }
   }
   return chunks.join('\n').trim();
+}
+
+async function analyzeImageWithAi({ sessionId, filePath, mimeType, description }) {
+  if (!openaiApiKey) {
+    return {
+      provider: 'local-rule-fallback',
+      model: null,
+      success: true,
+      imageCategory: 'unknown',
+      qualityScore: 0.5,
+      findings: '当前未配置 OPENAI_API_KEY，因此图片只完成了上传记录，没有进行真实 AI 图像分析。',
+      confidence: 0.3,
+      safetyNote: '图片分析仅作辅助，不能替代医生面诊。'
+    };
+  }
+
+  try {
+    const imageBase64 = fs.readFileSync(filePath).toString('base64');
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${openaiApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: openaiModel,
+        input: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'input_text',
+                text: [
+                  '你是中文健康问诊系统的图像辅助分析模块。',
+                  '请根据图片和用户描述做辅助分析，不要确诊。',
+                  '请输出 JSON，字段包含 imageCategory, qualityScore, findings, confidence, safetyNote。',
+                  'imageCategory 可选 skin, tongue, wound, lab_report, medical_report, medicine, unknown。',
+                  'qualityScore 和 confidence 是 0 到 1 的数字。',
+                  '如果图片涉及严重红肿、出血、感染、骨折可能、明显畸形或其他危险信号，要建议线下就医。',
+                  `用户描述：${description || '无'}`
+                ].join('\n')
+              },
+              {
+                type: 'input_image',
+                image_url: `data:${mimeType};base64,${imageBase64}`
+              }
+            ]
+          }
+        ],
+        temperature: 0.1,
+        max_output_tokens: 600
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error?.message || `OpenAI vision request failed: ${response.status}`);
+    }
+    const text = extractResponseText(data);
+    const parsed = parseJsonObject(text);
+    return {
+      provider: 'openai',
+      model: openaiModel,
+      success: true,
+      imageCategory: normalizeImageCategory(parsed.imageCategory),
+      qualityScore: clampNumber(parsed.qualityScore, 0.75),
+      findings: parsed.findings || text || 'AI 已分析图片，但未返回明确发现。',
+      confidence: clampNumber(parsed.confidence, 0.65),
+      safetyNote: parsed.safetyNote || '图片分析仅作辅助，不能替代医生面诊。'
+    };
+  } catch (error) {
+    return {
+      provider: 'openai',
+      model: openaiModel,
+      success: false,
+      error: error.message,
+      imageCategory: 'unknown',
+      qualityScore: 0.5,
+      findings: `AI 图像分析失败：${error.message}`,
+      confidence: 0.1,
+      safetyNote: '图片分析失败时请不要依赖系统判断，如症状明显或加重请线下就医。'
+    };
+  }
+}
+
+function parseJsonObject(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = String(text || '').match(/\{[\s\S]*\}/);
+    if (!match) return {};
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return {};
+    }
+  }
+}
+
+function normalizeImageCategory(value) {
+  const allowed = ['skin', 'tongue', 'wound', 'lab_report', 'medical_report', 'medicine', 'unknown'];
+  return allowed.includes(value) ? value : 'unknown';
+}
+
+function clampNumber(value, fallback) {
+  const number = Number(value);
+  if (Number.isNaN(number)) return fallback;
+  return Math.max(0, Math.min(1, number));
 }
 
 app.use((error, _req, res, _next) => {
