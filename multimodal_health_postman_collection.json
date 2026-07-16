@@ -1,0 +1,980 @@
+{
+  "info": {
+    "name": "多模态健康问诊 API",
+    "description": "用于多模态健康问诊项目的 Postman Collection。默认 baseUrl 为 http://localhost:8080/api/v1，可在 Collection Variables 中修改。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080/api/v1"
+    },
+    {
+      "key": "accessToken",
+      "value": ""
+    },
+    {
+      "key": "refreshToken",
+      "value": ""
+    },
+    {
+      "key": "userId",
+      "value": "1"
+    },
+    {
+      "key": "sessionId",
+      "value": "1"
+    },
+    {
+      "key": "fileId",
+      "value": "1"
+    }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "认证 Auth",
+      "item": [
+        {
+          "name": "用户注册",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"new_user\",\n  \"password\": \"Passw0rd!\",\n  \"displayName\": \"新用户\",\n  \"phone\": \"13800000999\",\n  \"email\": \"new_user@example.com\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "register"
+              ]
+            },
+            "description": "创建普通用户账号。"
+          }
+        },
+        {
+          "name": "用户登录",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data) {",
+                  "  pm.collectionVariables.set('accessToken', json.data.accessToken || '');",
+                  "  pm.collectionVariables.set('refreshToken', json.data.refreshToken || '');",
+                  "  if (json.data.user && json.data.user.id) pm.collectionVariables.set('userId', json.data.user.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"zhangsan\",\n  \"password\": \"123456\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "登录成功后自动保存 accessToken、refreshToken、userId 到 Collection Variables。"
+          }
+        },
+        {
+          "name": "刷新 Token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            }
+          }
+        },
+        {
+          "name": "退出登录",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "logout"
+              ]
+            }
+          }
+        },
+        {
+          "name": "当前用户信息",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "用户 Users",
+      "item": [
+        {
+          "name": "用户列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users?page=1&pageSize=10&keyword=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "10"
+                },
+                {
+                  "key": "keyword",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "用户详情",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "更新用户状态",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{userId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{userId}}",
+                "status"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "健康档案 Health Profiles",
+      "item": [
+        {
+          "name": "获取我的健康档案",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health-profile/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health-profile",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "创建或更新健康档案",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"gender\": \"male\",\n  \"birthDate\": \"1990-05-12\",\n  \"heightCm\": 175,\n  \"weightKg\": 72.5,\n  \"bloodType\": \"A\",\n  \"allergyHistory\": \"青霉素过敏\",\n  \"diseaseHistory\": \"过敏性鼻炎\",\n  \"surgeryHistory\": \"无\",\n  \"familyHistory\": \"父亲高血压\",\n  \"currentMedications\": \"氯雷他定按需使用\",\n  \"lifestyleNotes\": \"偶尔熬夜，每周运动2次\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/health-profile/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health-profile",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "新增健康指标",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"metricType\": \"blood_pressure\",\n  \"valueText\": \"128/82\",\n  \"unit\": \"mmHg\",\n  \"measuredAt\": \"2026-07-11T07:30:00+08:00\",\n  \"note\": \"晨起测量\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/health-profile/me/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health-profile",
+                "me",
+                "metrics"
+              ]
+            }
+          }
+        },
+        {
+          "name": "健康指标列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health-profile/me/metrics?metricType=blood_pressure&page=1&pageSize=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health-profile",
+                "me",
+                "metrics"
+              ],
+              "query": [
+                {
+                  "key": "metricType",
+                  "value": "blood_pressure"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "问诊 Consultation",
+      "item": [
+        {
+          "name": "创建问诊会话",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.id) pm.collectionVariables.set('sessionId', json.data.id);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"皮肤红疹瘙痒咨询\",\n  \"channel\": \"multimodal\",\n  \"initialMessage\": \"小腿起红疹两天，很痒，晚上更明显。\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/consultations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations"
+              ]
+            }
+          }
+        },
+        {
+          "name": "发送文本消息",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"小腿起红疹两天，很痒，晚上更明显。\",\n  \"context\": {\n    \"duration\": \"2天\",\n    \"bodyPart\": \"小腿\",\n    \"severity\": \"中等\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/consultations/{{sessionId}}/messages/text",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations",
+                "{{sessionId}}",
+                "messages",
+                "text"
+              ]
+            },
+            "description": "发送用户文本，并返回 AI 问诊回复。"
+          }
+        },
+        {
+          "name": "上传图片消息",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json.data && json.data.fileId) pm.collectionVariables.set('fileId', json.data.fileId);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "description",
+                  "value": "小腿红疹图片",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/consultations/{{sessionId}}/messages/image",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations",
+                "{{sessionId}}",
+                "messages",
+                "image"
+              ]
+            }
+          }
+        },
+        {
+          "name": "上传语音消息",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                },
+                {
+                  "key": "language",
+                  "value": "zh-CN",
+                  "type": "text"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/consultations/{{sessionId}}/messages/voice",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations",
+                "{{sessionId}}",
+                "messages",
+                "voice"
+              ]
+            }
+          }
+        },
+        {
+          "name": "触发多模态融合分析",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"messageIds\": [1, 2],\n  \"fileIds\": [\"{{fileId}}\"],\n  \"includeHealthProfile\": true,\n  \"includeHistory\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/consultations/{{sessionId}}/multimodal-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations",
+                "{{sessionId}}",
+                "multimodal-analysis"
+              ]
+            }
+          }
+        },
+        {
+          "name": "问诊历史列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/consultations?page=1&pageSize=10&riskLevel=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "10"
+                },
+                {
+                  "key": "riskLevel",
+                  "value": ""
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "问诊详情",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/consultations/{{sessionId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations",
+                "{{sessionId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "结束问诊",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"closed\",\n  \"summary\": \"用户小腿红疹瘙痒，建议观察并皮肤科就诊。\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/consultations/{{sessionId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations",
+                "{{sessionId}}",
+                "status"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "文件与分析 Files and AI",
+      "item": [
+        {
+          "name": "文件详情",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/files/{{fileId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "files",
+                "{{fileId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "图像分析结果",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/files/{{fileId}}/image-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "files",
+                "{{fileId}}",
+                "image-analysis"
+              ]
+            }
+          }
+        },
+        {
+          "name": "语音识别结果",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/files/{{fileId}}/speech-result",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "files",
+                "{{fileId}}",
+                "speech-result"
+              ]
+            }
+          }
+        },
+        {
+          "name": "文本转语音 TTS",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"建议观察体温，注意休息。如出现呼吸困难或高热不退，请及时就医。\",\n  \"voice\": \"female_standard\",\n  \"format\": \"mp3\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ai/tts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "tts"
+              ]
+            }
+          }
+        },
+        {
+          "name": "内容安全审核",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scene\": \"medical_consultation\",\n  \"content\": \"我胸口疼并且呼吸困难，需要怎么办？\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/ai/safety-check",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "ai",
+                "safety-check"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "风险评估 Risk",
+      "item": [
+        {
+          "name": "获取会话风险评估",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/consultations/{{sessionId}}/risk-assessments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations",
+                "{{sessionId}}",
+                "risk-assessments"
+              ]
+            }
+          }
+        },
+        {
+          "name": "创建风险评估",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"riskLevel\": \"medium\",\n  \"triggers\": [\"皮疹持续2天\", \"瘙痒明显\", \"过敏史\"],\n  \"recommendation\": \"建议皮肤科就诊或线上医生复核；若快速扩散、疼痛、发热或渗液，应及时线下就医。\",\n  \"needOfflineCare\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/consultations/{{sessionId}}/risk-assessments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "consultations",
+                "{{sessionId}}",
+                "risk-assessments"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "医生端 Doctor",
+      "item": [
+        {
+          "name": "待处理问诊列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/doctor/consultations?status=open&riskLevel=medium&page=1&pageSize=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "doctor",
+                "consultations"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "open"
+                },
+                {
+                  "key": "riskLevel",
+                  "value": "medium"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "医生回复",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"content\": \"建议保持局部清洁，避免抓挠。如红疹扩大或出现渗液，请到皮肤科面诊。\",\n  \"markHighRisk\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/doctor/consultations/{{sessionId}}/reply",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "doctor",
+                "consultations",
+                "{{sessionId}}",
+                "reply"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "管理后台 Admin",
+      "item": [
+        {
+          "name": "高风险会话列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/consultations/high-risk?page=1&pageSize=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "consultations",
+                "high-risk"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "10"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "模型调用日志",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/model-call-logs?sessionId={{sessionId}}&page=1&pageSize=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "model-call-logs"
+              ],
+              "query": [
+                {
+                  "key": "sessionId",
+                  "value": "{{sessionId}}"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "审计日志",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/admin/audit-logs?actorUserId=&action=&page=1&pageSize=20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "audit-logs"
+              ],
+              "query": [
+                {
+                  "key": "actorUserId",
+                  "value": ""
+                },
+                {
+                  "key": "action",
+                  "value": ""
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "20"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "更新安全规则",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"emergencySymptoms\": [\"胸痛\", \"呼吸困难\", \"意识障碍\", \"大出血\", \"严重过敏\", \"疑似卒中\"],\n  \"specialPopulationBoost\": true,\n  \"drugDoseRestriction\": true,\n  \"disclaimerRequired\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/admin/safety-rules",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "admin",
+                "safety-rules"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

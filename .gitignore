@@ -1,0 +1,16 @@
+node_modules/
+frontend/node_modules/
+frontend/dist/
+uploads/
+tmp/
+output/
+xuenwu-requirements-work/
+xuenwu_doc_work/
+
+.env
+.env.*
+*.log
+npm-debug.log*
+
+.DS_Store
+Thumbs.db
