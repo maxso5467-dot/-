@@ -22,6 +22,7 @@ function App() {
   const [speechResult, setSpeechResult] = useState(null)
   const [riskResult, setRiskResult] = useState(null)
   const [adminData, setAdminData] = useState({ highRisk: [], logs: [] })
+  const [aiStatus, setAiStatus] = useState(null)
 
   const authHeaders = useMemo(() => ({
     Authorization: `Bearer ${token}`
@@ -67,12 +68,14 @@ function App() {
   }
 
   async function loadProfile() {
-    const [profileData, metricData] = await Promise.all([
+    const [profileData, metricData, statusData] = await Promise.all([
       api('/health-profile/me'),
-      api('/health-profile/me/metrics?page=1&pageSize=10')
+      api('/health-profile/me/metrics?page=1&pageSize=10'),
+      api('/ai/status')
     ])
     setProfile(profileData)
     setMetrics(metricData.items || [])
+    setAiStatus(statusData)
   }
 
   async function saveProfile(event) {
@@ -126,7 +129,7 @@ function App() {
     setMessages((items) => [
       ...items,
       { senderType: 'user', content: chatText, inputType: 'text' },
-      { senderType: 'assistant', content: data.reply, inputType: 'text' }
+      { senderType: 'assistant', content: data.reply, inputType: 'text', ai: data.ai }
     ])
     setRiskResult(data.risk)
     await loadSessions()
@@ -242,6 +245,10 @@ function App() {
             <strong>API</strong>
             <span>{API_BASE}</span>
           </div>
+          <div>
+            <strong>AI</strong>
+            <span>{aiStatus?.realAiEnabled ? `${aiStatus.provider} · ${aiStatus.model}` : '本地规则占位'}</span>
+          </div>
           {notice && <p className="notice">{notice}</p>}
         </header>
 
@@ -286,6 +293,7 @@ function App() {
                   <article key={index} className={`bubble ${message.senderType}`}>
                     <span>{message.senderType}</span>
                     <p>{message.content}</p>
+                    {message.ai && <small>{message.ai.provider}{message.ai.model ? ` · ${message.ai.model}` : ''}</small>}
                   </article>
                 ))}
               </div>

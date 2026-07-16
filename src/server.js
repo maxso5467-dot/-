@@ -10,6 +10,8 @@ const path = require('path');
 const app = express();
 const port = Number(process.env.PORT || 8080);
 const jwtSecret = process.env.JWT_SECRET || 'local-dev-health-secret';
+const openaiApiKey = process.env.OPENAI_API_KEY || '';
+const openaiModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const uploadDir = path.join(__dirname, '..', 'uploads');
 const frontendDistDir = path.join(__dirname, '..', 'frontend', 'dist');
 
@@ -101,7 +103,20 @@ function pageArgs(req, defaultPageSize = 10) {
 
 app.get('/api/v1/health', asyncRoute(async (_req, res) => {
   const row = await getOne('SELECT VERSION() AS mysql_version');
-  res.json(ok({ status: 'ok', mysqlVersion: row.mysql_version }));
+  res.json(ok({
+    status: 'ok',
+    mysqlVersion: row.mysql_version,
+    aiProvider: openaiApiKey ? 'openai' : 'local-rule-fallback',
+    aiModel: openaiApiKey ? openaiModel : null
+  }));
+}));
+
+app.get('/api/v1/ai/status', auth, asyncRoute(async (_req, res) => {
+  res.json(ok({
+    provider: openaiApiKey ? 'openai' : 'local-rule-fallback',
+    model: openaiApiKey ? openaiModel : null,
+    realAiEnabled: Boolean(openaiApiKey)
+  }));
 }));
 
 app.post('/api/v1/auth/register', asyncRoute(async (req, res) => {
@@ -292,18 +307,35 @@ app.post('/api/v1/consultations/:id/messages/text', auth, asyncRoute(async (req,
      VALUES (?, 'user', 'text', ?, ?)`,
     [req.params.id, content, JSON.stringify(req.body.context || {})]
   );
-  const assistantText = buildAssistantReply(content);
   const risk = inferRisk(content);
+  const aiStarted = Date.now();
+  const aiResult = await buildAssistantReply({
+    sessionId: req.params.id,
+    userId: req.user.id,
+    content,
+    risk
+  });
+  const assistantText = aiResult.text;
   const result = await query(
     `INSERT INTO consultation_messages (session_id, sender_type, input_type, content, structured_json)
      VALUES (?, 'assistant', 'text', ?, ?)`,
-    [req.params.id, assistantText, JSON.stringify({ riskLevel: risk.level, recommendation: risk.recommendation })]
+    [req.params.id, assistantText, JSON.stringify({
+      riskLevel: risk.level,
+      recommendation: risk.recommendation,
+      aiProvider: aiResult.provider,
+      aiModel: aiResult.model
+    })]
+  );
+  await query(
+    `INSERT INTO model_call_logs (session_id, provider, model_name, capability, latency_ms, success, error_message)
+     VALUES (?, ?, ?, 'llm', ?, ?, ?)`,
+    [req.params.id, aiResult.provider, aiResult.model || 'none', Date.now() - aiStarted, aiResult.success, aiResult.error || null]
   );
   await query(
     `UPDATE consultation_sessions SET risk_level = ?, recommended_department = COALESCE(recommended_department, ?), updated_at = NOW() WHERE id = ?`,
     [risk.level, risk.department, req.params.id]
   );
-  res.status(201).json(ok({ messageId: result.insertId, reply: assistantText, risk }));
+  res.status(201).json(ok({ messageId: result.insertId, reply: assistantText, risk, ai: aiResult }));
 }));
 
 app.post('/api/v1/consultations/:id/messages/image', auth, upload.single('file'), asyncRoute(async (req, res) => {
@@ -484,9 +516,81 @@ function inferRisk(text) {
   };
 }
 
-function buildAssistantReply(text) {
-  const risk = inferRisk(text);
-  return `已记录你的描述。${risk.recommendation} 本系统仅提供健康咨询辅助，不能替代医生诊断。`;
+async function buildAssistantReply({ sessionId, userId, content, risk }) {
+  if (!openaiApiKey) {
+    return {
+      provider: 'local-rule-fallback',
+      model: null,
+      success: true,
+      text: `当前未配置 OPENAI_API_KEY，因此这是本地规则回复，不是真正 AI。${risk.recommendation} 本系统仅提供健康咨询辅助，不能替代医生诊断。`
+    };
+  }
+
+  try {
+    const profile = await getOne('SELECT * FROM health_profiles WHERE user_id = ?', [userId]);
+    const history = await query(
+      `SELECT sender_type, content FROM consultation_messages
+       WHERE session_id = ? ORDER BY id DESC LIMIT 8`,
+      [sessionId]
+    );
+    const prompt = [
+      '你是一个中文多模态健康问诊助手，只提供健康咨询、症状整理、风险提示和就医建议，不做确诊。',
+      '回答必须包含：1. 对用户描述的理解；2. 需要追问的关键信息；3. 可能风险；4. 居家观察建议；5. 何时线下就医。',
+      '如果出现胸痛、呼吸困难、意识障碍、大出血、严重过敏、疑似卒中等危险信号，必须明确建议立即急诊或拨打急救电话。',
+      '不要编造检查结果，不要给出处方剂量，不要说“你就是某某病”。',
+      '',
+      `当前规则风险等级：${risk.level}`,
+      `规则建议：${risk.recommendation}`,
+      `健康档案：${JSON.stringify(toCamel(profile) || {})}`,
+      `最近对话：${JSON.stringify(history.reverse().map(toCamel))}`,
+      `用户最新描述：${content}`
+    ].join('\n');
+
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${openaiApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: openaiModel,
+        input: prompt,
+        temperature: 0.2,
+        max_output_tokens: 700
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error?.message || `OpenAI request failed: ${response.status}`);
+    }
+    const text = extractResponseText(data);
+    return {
+      provider: 'openai',
+      model: openaiModel,
+      success: true,
+      text: text || `AI 没有返回有效文本。${risk.recommendation}`
+    };
+  } catch (error) {
+    return {
+      provider: 'openai',
+      model: openaiModel,
+      success: false,
+      error: error.message,
+      text: `AI 调用失败，已降级为本地安全回复：${risk.recommendation} 本系统仅提供健康咨询辅助，不能替代医生诊断。`
+    };
+  }
+}
+
+function extractResponseText(data) {
+  if (data.output_text) return data.output_text;
+  const chunks = [];
+  for (const item of data.output || []) {
+    for (const content of item.content || []) {
+      if (content.type === 'output_text' && content.text) chunks.push(content.text);
+      if (content.type === 'text' && content.text) chunks.push(content.text);
+    }
+  }
+  return chunks.join('\n').trim();
 }
 
 app.use((error, _req, res, _next) => {

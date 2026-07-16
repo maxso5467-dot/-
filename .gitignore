@@ -9,6 +9,7 @@ xuenwu_doc_work/
 
 .env
 .env.*
+!.env.example
 *.log
 npm-debug.log*
 

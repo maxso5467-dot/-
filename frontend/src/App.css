@@ -110,6 +110,7 @@ nav button.active {
   gap: 16px;
   align-items: center;
   margin-bottom: 20px;
+  flex-wrap: wrap;
 }
 
 .topbar div {
@@ -216,6 +217,12 @@ textarea {
   color: #60726d;
   font-size: 12px;
   font-weight: 700;
+}
+
+.bubble small {
+  display: block;
+  margin-top: 8px;
+  color: #61736f;
 }
 
 .bubble p {
