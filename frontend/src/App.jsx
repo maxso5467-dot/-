@@ -21,6 +21,7 @@ function App() {
   const [imageResult, setImageResult] = useState(null)
   const [speechResult, setSpeechResult] = useState(null)
   const [riskResult, setRiskResult] = useState(null)
+  const [consultationAnalysis, setConsultationAnalysis] = useState(null)
   const [adminData, setAdminData] = useState({ highRisk: [], logs: [] })
   const [aiStatus, setAiStatus] = useState(null)
 
@@ -99,30 +100,33 @@ function App() {
       method: 'POST',
       body: JSON.stringify({
         title: sessionTitle,
-        channel: 'multimodal',
-        initialMessage: chatText
+        channel: 'multimodal'
       })
     })
     setCurrentSession({ id: data.id, title: sessionTitle })
-    setMessages([{ senderType: 'user', content: chatText, inputType: 'text' }])
+    setMessages([])
+    setConsultationAnalysis(null)
     await loadSessions()
     setNotice('问诊会话已创建')
+    return data.id
   }
 
   async function openSession(id) {
     const data = await api(`/consultations/${id}`)
     setCurrentSession(data)
     setMessages(data.messages || [])
+    setConsultationAnalysis(data.analysis || null)
+    setRiskResult(data.analysis?.risk || null)
     setImageResult(null)
     setSpeechResult(null)
   }
 
   async function sendText() {
+    let sessionId = currentSession?.id
     if (!currentSession?.id) {
-      await createSession()
-      return
+      sessionId = await createSession()
     }
-    const data = await api(`/consultations/${currentSession.id}/messages/text`, {
+    const data = await api(`/consultations/${sessionId}/messages/text`, {
       method: 'POST',
       body: JSON.stringify({ content: chatText, context: { source: 'web' } })
     })
@@ -132,6 +136,8 @@ function App() {
       { senderType: 'assistant', content: data.reply, inputType: 'text', ai: data.ai }
     ])
     setRiskResult(data.risk)
+    setConsultationAnalysis(data.analysis)
+    setNotice('结构化问诊分析已完成')
     await loadSessions()
   }
 
@@ -151,11 +157,13 @@ function App() {
     if (type === 'voice') body.append('language', 'zh-CN')
     const data = await api(`/consultations/${currentSession.id}/messages/${type}`, { method: 'POST', body })
     if (type === 'image') {
-      setImageResult(data.analysis || await api(`/files/${data.fileId}/image-analysis`))
+      const analysis = data.analysis || await api(`/files/${data.fileId}/image-analysis`)
+      setImageResult(analysis)
+      setNotice(analysis.success === false ? analysis.userMessage : '图片已上传并完成分析')
     } else {
       setSpeechResult(await api(`/files/${data.fileId}/speech-result`))
+      setNotice('语音文件已上传并处理')
     }
-    setNotice('文件已上传并分析')
   }
 
   async function runSafetyCheck() {
@@ -247,7 +255,11 @@ function App() {
           </div>
           <div className={aiStatus?.realAiEnabled ? 'status-pill ok' : 'status-pill warn'}>
             <strong>AI</strong>
-            <span>{aiStatus?.realAiEnabled ? `${aiStatus.provider} · ${aiStatus.model}` : '本地规则占位'}</span>
+            <span>
+              {aiStatus?.realAiEnabled
+                ? `${aiStatus.provider} · ${aiStatus.model}${aiStatus.visionEnabled ? '' : ' · 仅文本'}`
+                : '本地规则占位'}
+            </span>
           </div>
           {notice && <p className="notice">{notice}</p>}
         </header>
@@ -297,8 +309,9 @@ function App() {
                   </article>
                 ))}
               </div>
-              {riskResult && <Result title="风险提示" data={riskResult} />}
-              {imageResult && <Result title="图像分析" data={imageResult} />}
+              {consultationAnalysis && <ConsultationAnalysis analysis={consultationAnalysis} />}
+              {!consultationAnalysis && riskResult && <Result title="风险提示" data={riskResult} />}
+              {imageResult && <ImageAnalysisStatus result={imageResult} />}
               {speechResult && <Result title="语音识别" data={speechResult} />}
             </div>
           </section>
@@ -353,6 +366,95 @@ function App() {
       </section>
     </main>
   )
+}
+
+function ConsultationAnalysis({ analysis }) {
+  const risk = analysis.risk || {}
+  const pendingQuestions = (analysis.followUpQuestions || []).filter((item) => !item.status || item.status === 'pending')
+  const progress = analysis.questionProgress
+  return (
+    <section className="analysis-board">
+      <div className="analysis-head">
+        <strong>结构化问诊结果</strong>
+        <div className="analysis-meta">
+          {progress && <span className="progress-text">已回答 {progress.answered} · 待补充 {progress.pending}</span>}
+          <span className={`risk-badge ${risk.level || 'low'}`}>{risk.level || 'low'}</span>
+        </div>
+      </div>
+
+      <div className="analysis-section">
+        <h3>症状提取</h3>
+        <div className="symptom-list">
+          {(analysis.symptoms || []).map((symptom, index) => (
+            <article className="symptom-item" key={`${symptom.name}-${index}`}>
+              <strong>{symptom.name}</strong>
+              <span>{symptom.bodyPart || '部位待确认'}</span>
+              <span>{symptom.duration || '持续时间待确认'}</span>
+              <span>{severityText(symptom.severity)}</span>
+            </article>
+          ))}
+        </div>
+      </div>
+
+      {!!pendingQuestions.length && (
+        <div className="analysis-section">
+          <h3>需要补充</h3>
+          <ol className="question-list">
+            {pendingQuestions.map((item, index) => (
+              <li key={`${item.question || item.questionText}-${index}`}>{item.question || item.questionText}</li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      <div className="analysis-section risk-summary">
+        <h3>风险与就医建议</h3>
+        <p>{risk.action || risk.recommendation}</p>
+        <dl>
+          <div><dt>建议科室</dt><dd>{risk.department || analysis.summary?.suggestedDepartment || '全科'}</dd></div>
+          <div><dt>风险原因</dt><dd>{(risk.reasons || risk.triggers || []).join('、') || '暂无明确危险信号'}</dd></div>
+        </dl>
+      </div>
+
+      {!!analysis.recommendations?.length && (
+        <div className="analysis-section">
+          <h3>行动建议</h3>
+          <ul className="recommendation-list">
+            {analysis.recommendations.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
+          </ul>
+        </div>
+      )}
+
+      <div className="analysis-section doctor-summary">
+        <h3>医生摘要</h3>
+        <p>{analysis.doctorSummary || analysis.summary?.doctorSummary || '尚未生成摘要'}</p>
+      </div>
+    </section>
+  )
+}
+
+function ImageAnalysisStatus({ result }) {
+  const failed = result.success === false
+  return (
+    <section className={`image-status ${failed ? 'unavailable' : 'available'}`}>
+      <div className="image-status-head">
+        <strong>{failed ? '图片暂未分析' : '图片分析完成'}</strong>
+        <span>{result.errorCode || result.imageCategory || '完成'}</span>
+      </div>
+      <p>{result.userMessage || result.findings}</p>
+      {!failed && result.findings && <p className="image-finding">{result.findings}</p>}
+      <small>{result.safetyNote}</small>
+    </section>
+  )
+}
+
+function severityText(value) {
+  return {
+    mild: '轻度',
+    moderate: '中度',
+    severe: '重度',
+    unknown: '程度待确认'
+  }[value] || '程度待确认'
 }
 
 function Result({ title, data }) {
