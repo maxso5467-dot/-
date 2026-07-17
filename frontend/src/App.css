@@ -176,7 +176,8 @@ label {
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid #c9d7d2;
@@ -185,6 +186,87 @@ textarea {
   font: inherit;
   color: #1f2d2a;
   background: #fbfdfc;
+}
+
+.mode-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 14px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: #40514d;
+  font-size: 14px;
+}
+
+.segmented-control {
+  display: flex;
+  padding: 3px;
+  border: 1px solid #c9d7d2;
+  border-radius: 6px;
+  background: #f3f7f5;
+}
+
+.segmented-control button {
+  min-height: 34px;
+  padding: 6px 13px;
+  background: transparent;
+  color: #40514d;
+}
+
+.segmented-control button.selected {
+  background: #277a68;
+  color: #ffffff;
+}
+
+.guided-assessment {
+  margin-bottom: 14px;
+  border: 1px solid #d9e4df;
+  border-radius: 6px;
+  background: #f8fbfa;
+}
+
+.guided-assessment summary {
+  padding: 11px 12px;
+  cursor: pointer;
+  color: #244b42;
+  font-weight: 700;
+}
+
+.guided-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+.guided-wide {
+  grid-column: 1 / -1;
+}
+
+.care-elder {
+  font-size: 18px;
+}
+
+.care-elder button,
+.care-elder input,
+.care-elder textarea,
+.care-elder select {
+  font-size: 17px;
+}
+
+.care-elder .panel h2 {
+  font-size: 24px;
+}
+
+.care-child .guided-assessment,
+.care-child .analysis-section {
+  border-color: #a8c9e8;
 }
 
 textarea {
@@ -467,5 +549,38 @@ tbody tr:hover {
 
   .content {
     padding: 16px;
+  }
+
+  .guided-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media print {
+  .sidebar,
+  .topbar,
+  .consultation-input,
+  .print-button {
+    display: none !important;
+  }
+
+  .app-shell,
+  .grid.two {
+    display: block;
+    background: #ffffff;
+  }
+
+  .content {
+    padding: 0;
+  }
+
+  .consultation-results {
+    border: 0;
+    padding: 0;
+  }
+
+  .chat-box {
+    max-height: none;
+    overflow: visible;
   }
 }

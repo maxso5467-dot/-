@@ -1,0 +1,18 @@
+<view class="page consultation-page">
+  <view class="section-title">描述你的症状</view>
+  <text class="page-hint">请尽量说明部位、持续时间、程度和伴随症状</text>
+  <view class="panel consultation-form">
+    <view class="field">
+      <text class="label">问诊标题</text>
+      <input class="input" value="{{title}}" bindinput="onTitle" placeholder="例如：小腿疼痛" />
+    </view>
+    <view class="field">
+      <text class="label">症状描述</text>
+      <textarea class="textarea" value="{{message}}" bindinput="onMessage" maxlength="1000" placeholder="例如：小腿红肿疼痛两天，走路时加重" />
+      <view class="counter">{{message.length}} / 1000</view>
+    </view>
+    <button class="primary" loading="{{loading}}" disabled="{{loading}}" bindtap="submit">发送问诊</button>
+    <button class="secondary" bindtap="showImageComingSoon">图片问诊（开发中）</button>
+  </view>
+  <view wx:if="{{answer}}" class="answer">{{answer}}</view>
+</view>

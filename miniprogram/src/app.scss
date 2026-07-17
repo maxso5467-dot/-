@@ -1,0 +1,111 @@
+page {
+  min-height: 100%;
+  background: #f4f7f5;
+  color: #1f2d2a;
+  font-size: 28px;
+}
+
+.page {
+  padding: 28px;
+}
+
+.brand {
+  color: #277a68;
+  font-size: 24px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 12px 0;
+  font-size: 44px;
+  font-weight: 800;
+}
+
+.subtitle,
+.muted {
+  color: #687773;
+  line-height: 1.6;
+}
+
+.panel {
+  margin-bottom: 22px;
+  padding: 26px;
+  border: 1px solid #d9e4df;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.panel-title {
+  margin-bottom: 20px;
+  font-size: 32px;
+  font-weight: 750;
+}
+
+.field {
+  margin-bottom: 20px;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 10px;
+  color: #42524e;
+  font-size: 26px;
+}
+
+.input,
+.textarea,
+.picker {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 20px;
+  border: 1px solid #c8d7d2;
+  border-radius: 10px;
+  background: #fbfdfc;
+}
+
+.textarea {
+  min-height: 190px;
+}
+
+.primary-button,
+.secondary-button {
+  margin: 14px 0 0;
+  border: 0;
+  border-radius: 10px;
+  background: #277a68;
+  color: #ffffff;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.secondary-button {
+  background: #e5efeb;
+  color: #1f3f39;
+}
+
+.segments {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.segment {
+  flex: 1;
+  padding: 16px 8px;
+  border: 1px solid #c9d7d2;
+  border-radius: 9px;
+  background: #ffffff;
+  text-align: center;
+}
+
+.segment.active {
+  border-color: #277a68;
+  background: #277a68;
+  color: #ffffff;
+}
+
+.risk-low { color: #277a68; }
+.risk-medium { color: #8a6500; }
+.risk-high,
+.risk-emergency { color: #a62323; }

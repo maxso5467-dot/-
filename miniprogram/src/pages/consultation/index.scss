@@ -1,0 +1,11 @@
+.language-switch { margin: -8px 0 20px; color: #277a68; text-align: right; font-size: 24px; }
+.picker { margin-bottom: 12px; }
+.chat-list { max-height: 620px; }
+.message { width: 86%; margin-bottom: 14px; padding: 18px; border-radius: 12px; line-height: 1.6; }
+.message.user { margin-left: auto; background: #eaf2ef; }
+.message.assistant { background: #e7f0fb; }
+.analysis-head { display: flex; justify-content: space-between; }
+.analysis-label { display: block; margin: 20px 0 8px; color: #65736f; font-size: 24px; }
+.question { display: block; margin: 8px 0; }
+.care-elder { font-size: 34px; }
+.care-elder .message { line-height: 1.8; }

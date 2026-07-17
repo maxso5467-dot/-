@@ -17,6 +17,8 @@ const deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
 const deepseekBaseUrl = String(process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const openaiApiKey = process.env.OPENAI_API_KEY || '';
 const openaiModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const wechatAppId = process.env.WECHAT_APP_ID || '';
+const wechatAppSecret = process.env.WECHAT_APP_SECRET || '';
 const uploadDir = path.join(__dirname, '..', 'uploads');
 const frontendDistDir = path.join(__dirname, '..', 'frontend', 'dist');
 
@@ -166,6 +168,76 @@ app.post('/api/v1/auth/login', asyncRoute(async (req, res) => {
   res.json(ok({
     accessToken,
     refreshToken,
+    user: toCamel({
+      id: user.id,
+      username: user.username,
+      display_name: user.display_name,
+      role_code: user.role_code,
+      role_name: user.role_name
+    })
+  }));
+}));
+
+app.post('/api/v1/auth/wechat/login', asyncRoute(async (req, res) => {
+  const code = String(req.body.code || '').trim();
+  if (!code) return res.status(400).json(fail('微信登录code不能为空'));
+  if (!wechatAppId || !wechatAppSecret) {
+    return res.status(503).json(fail('服务器尚未配置微信小程序AppID和AppSecret', 503));
+  }
+
+  const url = new URL('https://api.weixin.qq.com/sns/jscode2session');
+  url.searchParams.set('appid', wechatAppId);
+  url.searchParams.set('secret', wechatAppSecret);
+  url.searchParams.set('js_code', code);
+  url.searchParams.set('grant_type', 'authorization_code');
+  const response = await fetch(url);
+  const wechatData = await response.json();
+  if (!response.ok || wechatData.errcode || !wechatData.openid) {
+    return res.status(401).json(fail(wechatData.errmsg || '微信登录验证失败', 401));
+  }
+
+  let user = await getOne(
+    `SELECT u.*, r.code AS role_code, r.name AS role_name
+     FROM wechat_accounts wa
+     JOIN users u ON u.id = wa.user_id
+     JOIN roles r ON r.id = u.role_id
+     WHERE wa.openid = ?`,
+    [wechatData.openid]
+  );
+
+  if (!user) {
+    const role = await getOne("SELECT id FROM roles WHERE code = 'user'");
+    const username = `wx_${wechatData.openid.slice(-12)}`;
+    const passwordHash = await bcrypt.hash(`${wechatData.openid}:${Date.now()}`, 10);
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const [userResult] = await connection.execute(
+        `INSERT INTO users (role_id, username, password_hash, display_name)
+         VALUES (?, ?, ?, '微信用户')`,
+        [role.id, username, passwordHash]
+      );
+      await connection.execute(
+        'INSERT INTO wechat_accounts (user_id, openid, unionid) VALUES (?, ?, ?)',
+        [userResult.insertId, wechatData.openid, wechatData.unionid || null]
+      );
+      await connection.commit();
+      user = await getOne(
+        `SELECT u.*, r.code AS role_code, r.name AS role_name
+         FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`,
+        [userResult.insertId]
+      );
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  const accessToken = signToken(user);
+  res.json(ok({
+    accessToken,
     user: toCamel({
       id: user.id,
       username: user.username,
@@ -365,6 +437,7 @@ app.get('/api/v1/consultations/:id', auth, asyncRoute(async (req, res) => {
 
 app.post('/api/v1/consultations/:id/messages/text', auth, asyncRoute(async (req, res) => {
   const content = String(req.body.content || '').trim();
+  const consultationContext = normalizeConsultationContext(req.body.context);
   if (!content) return res.status(400).json(fail('content is required'));
   const session = await getOwnedSession(req.params.id, req.user.id);
   if (!session) return res.status(404).json(fail('Consultation not found', 404));
@@ -372,7 +445,7 @@ app.post('/api/v1/consultations/:id/messages/text', auth, asyncRoute(async (req,
   const userMessage = await query(
     `INSERT INTO consultation_messages (session_id, sender_type, input_type, content, structured_json)
      VALUES (?, 'user', 'text', ?, ?)`,
-    [req.params.id, content, JSON.stringify(req.body.context || {})]
+    [req.params.id, content, JSON.stringify(consultationContext)]
   );
   const pendingQuestions = await query(
     `SELECT id, question_text, target_field, priority
@@ -388,9 +461,16 @@ app.post('/api/v1/consultations/:id/messages/text', auth, asyncRoute(async (req,
     userId: req.user.id,
     content,
     risk: ruleRisk,
-    pendingQuestions: pendingQuestions.map(toCamel)
+    pendingQuestions: pendingQuestions.map(toCamel),
+    consultationContext
   });
-  const analysis = normalizeConsultationAnalysis(aiResult.analysis, content, ruleRisk, pendingQuestions.map(toCamel));
+  const analysis = normalizeConsultationAnalysis(
+    aiResult.analysis,
+    content,
+    ruleRisk,
+    pendingQuestions.map(toCamel),
+    consultationContext
+  );
   const connection = await pool.getConnection();
   let assistantMessageId;
   try {
@@ -533,6 +613,21 @@ async function getQuestionProgress(sessionId) {
     pending: counts.pending || 0,
     skipped: counts.skipped || 0,
     total: rows.reduce((sum, row) => sum + Number(row.total), 0)
+  };
+}
+
+function normalizeConsultationContext(context = {}) {
+  const careMode = ['standard', 'child', 'elder'].includes(context?.careMode)
+    ? context.careMode
+    : 'standard';
+  const outputLanguage = ['zh-CN', 'zh-CN,en'].includes(context?.outputLanguage)
+    ? context.outputLanguage
+    : 'zh-CN';
+  return {
+    source: ['web', 'miniprogram'].includes(context?.source) ? context.source : 'unknown',
+    careMode,
+    outputLanguage,
+    guided: Boolean(context?.guided)
   };
 }
 
@@ -775,14 +870,21 @@ function hasAffirmedKeyword(text, keyword) {
   return false;
 }
 
-async function buildAssistantReply({ sessionId, userId, content, risk, pendingQuestions = [] }) {
+async function buildAssistantReply({
+  sessionId,
+  userId,
+  content,
+  risk,
+  pendingQuestions = [],
+  consultationContext = {}
+}) {
   const providerKey = aiProvider === 'deepseek' ? deepseekApiKey : openaiApiKey;
   if (!providerKey) {
     return {
       provider: 'local-rule-fallback',
       model: null,
       success: true,
-      analysis: buildLocalConsultationAnalysis(content, risk, undefined, pendingQuestions)
+      analysis: buildLocalConsultationAnalysis(content, risk, undefined, pendingQuestions, consultationContext)
     };
   }
 
@@ -804,9 +906,14 @@ async function buildAssistantReply({ sessionId, userId, content, risk, pendingQu
       'risk 包含 level, reasons, department, action；level 只能是 low, medium, high, emergency。',
       '如果出现胸痛、呼吸困难、意识障碍、大出血、严重过敏、疑似卒中等危险信号，必须明确建议立即急诊或拨打急救电话。',
       '不要编造检查结果，不要给出处方剂量，不要说“你就是某某病”。',
+      consultationModeInstruction(consultationContext),
+      consultationContext.outputLanguage === 'zh-CN,en'
+        ? 'reply、recommendations 和面向用户的追问必须先写中文，再附简明英文翻译。doctorSummary 保持中文。'
+        : '使用简洁、易懂的中文回答。',
       '',
       `当前规则风险等级：${risk.level}`,
       `规则建议：${risk.recommendation}`,
+      `问诊交互设置：${JSON.stringify(consultationContext)}`,
       `健康档案：${JSON.stringify(toCamel(profile) || {})}`,
       `最近对话：${JSON.stringify(history.reverse().map(toCamel))}`,
       `当前待回答问题：${JSON.stringify(pendingQuestions)}`,
@@ -867,9 +974,25 @@ async function buildAssistantReply({ sessionId, userId, content, risk, pendingQu
       model: aiProvider === 'deepseek' ? deepseekModel : openaiModel,
       success: false,
       error: error.message,
-      analysis: buildLocalConsultationAnalysis(content, risk, 'AI调用失败，已使用本地结构化规则。', pendingQuestions)
+      analysis: buildLocalConsultationAnalysis(
+        content,
+        risk,
+        'AI调用失败，已使用本地结构化规则。',
+        pendingQuestions,
+        consultationContext
+      )
     };
   }
+}
+
+function consultationModeInstruction(context = {}) {
+  if (context.careMode === 'child') {
+    return '当前是儿童问诊模式。面向家长分步提问，优先确认儿童年龄、体温、精神状态、饮水进食、尿量、皮疹和呼吸情况；不得把成人判断标准直接套用于儿童。';
+  }
+  if (context.careMode === 'elder') {
+    return '当前是老人问诊模式。使用短句和通俗词汇，结合慢性病、过敏史和当前用药，优先确认意识、跌倒、胸痛、呼吸、活动能力及是否独居；行动建议必须清晰。';
+  }
+  return '当前是普通问诊模式，按标准健康咨询流程收集信息。';
 }
 
 function getAiStatus() {
@@ -904,7 +1027,8 @@ function buildLocalConsultationAnalysis(
   content,
   risk,
   prefix = '当前未配置所选AI服务的API密钥，以下为本地结构化规则结果。',
-  pendingQuestions = []
+  pendingQuestions = [],
+  consultationContext = {}
 ) {
   const symptom = inferSymptom(content);
   const answeredQuestionIds = inferAnsweredQuestionIds(content, pendingQuestions);
@@ -919,7 +1043,7 @@ function buildLocalConsultationAnalysis(
     questions.push({ question: '是否伴有发热、肿胀、出血、渗液或呼吸困难？', field: 'red_flags', priority: 3 });
   }
   return {
-    reply: `${prefix}${risk.recommendation} 本系统仅提供健康咨询辅助，不能替代医生诊断。`,
+    reply: `${prefix}${consultationContext.careMode === 'child' ? '当前为儿童问诊模式，请由监护人核对信息。' : ''}${consultationContext.careMode === 'elder' ? '当前为老人问诊模式，建议家属协助核对用药和症状。' : ''}${risk.recommendation} 本系统仅提供健康咨询辅助，不能替代医生诊断。`,
     answeredQuestionIds,
     symptoms: [symptom],
     followUpQuestions: questions.slice(0, 3),
@@ -980,8 +1104,8 @@ function inferSymptom(content) {
   };
 }
 
-function normalizeConsultationAnalysis(raw, content, ruleRisk, pendingQuestions = []) {
-  const fallback = buildLocalConsultationAnalysis(content, ruleRisk, undefined, pendingQuestions);
+function normalizeConsultationAnalysis(raw, content, ruleRisk, pendingQuestions = [], consultationContext = {}) {
+  const fallback = buildLocalConsultationAnalysis(content, ruleRisk, undefined, pendingQuestions, consultationContext);
   const riskOrder = { low: 0, medium: 1, high: 2, emergency: 3 };
   const aiRiskLevel = Object.hasOwn(riskOrder, raw?.risk?.level) ? raw.risk.level : 'low';
   const finalRiskLevel = riskOrder[ruleRisk.level] >= riskOrder[aiRiskLevel] ? ruleRisk.level : aiRiskLevel;

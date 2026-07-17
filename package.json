@@ -8,6 +8,9 @@
     "dev": "node src/server.js",
     "frontend:dev": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
+    "miniprogram:install": "npm --prefix miniprogram install",
+    "miniprogram:dev": "npm --prefix miniprogram run dev:weapp",
+    "miniprogram:build": "npm --prefix miniprogram run build:weapp",
     "build": "npm --prefix frontend run build",
     "serve": "npm run build && node src/server.js"
   },

@@ -1,0 +1,4 @@
+.consultation-page { padding-top: 30rpx; }
+.page-hint { display: block; margin-top: 8rpx; color: #71807b; font-size: 24rpx; }
+.consultation-form { margin-top: 22rpx; }
+.counter { margin-top: 8rpx; color: #87938f; font-size: 22rpx; text-align: right; }

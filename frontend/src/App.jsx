@@ -16,14 +16,22 @@ function App() {
   const [messages, setMessages] = useState([])
   const [chatText, setChatText] = useState('小腿起红疹两天，很痒，晚上更明显。')
   const [sessionTitle, setSessionTitle] = useState('皮肤红疹瘙痒咨询')
-  const [selectedImage, setSelectedImage] = useState(null)
   const [selectedAudio, setSelectedAudio] = useState(null)
-  const [imageResult, setImageResult] = useState(null)
   const [speechResult, setSpeechResult] = useState(null)
   const [riskResult, setRiskResult] = useState(null)
   const [consultationAnalysis, setConsultationAnalysis] = useState(null)
   const [adminData, setAdminData] = useState({ highRisk: [], logs: [] })
   const [aiStatus, setAiStatus] = useState(null)
+  const [careMode, setCareMode] = useState(localStorage.getItem('health_care_mode') || 'standard')
+  const [outputLanguage, setOutputLanguage] = useState('zh-CN')
+  const [guidedInput, setGuidedInput] = useState({
+    bodyPart: '下肢',
+    symptom: '疼痛',
+    duration: '2天',
+    severity: '中度，影响部分日常活动',
+    accompanying: '无明显伴随症状'
+  })
+  const [guidedApplied, setGuidedApplied] = useState(false)
 
   const authHeaders = useMemo(() => ({
     Authorization: `Bearer ${token}`
@@ -128,7 +136,10 @@ function App() {
     }
     const data = await api(`/consultations/${sessionId}/messages/text`, {
       method: 'POST',
-      body: JSON.stringify({ content: chatText, context: { source: 'web' } })
+      body: JSON.stringify({
+        content: chatText,
+        context: { source: 'web', careMode, outputLanguage, guided: guidedApplied }
+      })
     })
     setMessages((items) => [
       ...items,
@@ -137,33 +148,40 @@ function App() {
     ])
     setRiskResult(data.risk)
     setConsultationAnalysis(data.analysis)
+    setGuidedApplied(false)
     setNotice('结构化问诊分析已完成')
     await loadSessions()
   }
 
-  async function uploadFile(type) {
+  function applyGuidedAssessment() {
+    const modeText = careMode === 'child' ? '儿童患者' : careMode === 'elder' ? '老年患者' : '本人'
+    const text = `${modeText}${guidedInput.bodyPart}出现${guidedInput.symptom}，持续${guidedInput.duration}，程度为${guidedInput.severity}，${guidedInput.accompanying}。`
+    setChatText(text)
+    setGuidedApplied(true)
+    setNotice('症状自查信息已整理，可继续补充后发送问诊')
+  }
+
+  function changeCareMode(mode) {
+    setCareMode(mode)
+    localStorage.setItem('health_care_mode', mode)
+  }
+
+  async function uploadVoice() {
     if (!currentSession?.id) {
       setNotice('请先创建或打开一个问诊会话')
       return
     }
-    const file = type === 'image' ? selectedImage : selectedAudio
-    if (!file) {
-      setNotice(type === 'image' ? '请选择图片文件' : '请选择音频文件')
-      return
-    }
+    if (!selectedAudio) return setNotice('请选择音频文件')
     const body = new FormData()
-    body.append('file', file)
-    if (type === 'image') body.append('description', '问诊图片')
-    if (type === 'voice') body.append('language', 'zh-CN')
-    const data = await api(`/consultations/${currentSession.id}/messages/${type}`, { method: 'POST', body })
-    if (type === 'image') {
-      const analysis = data.analysis || await api(`/files/${data.fileId}/image-analysis`)
-      setImageResult(analysis)
-      setNotice(analysis.success === false ? analysis.userMessage : '图片已上传并完成分析')
-    } else {
-      setSpeechResult(await api(`/files/${data.fileId}/speech-result`))
-      setNotice('语音文件已上传并处理')
-    }
+    body.append('file', selectedAudio)
+    body.append('language', 'zh-CN')
+    const data = await api(`/consultations/${currentSession.id}/messages/voice`, { method: 'POST', body })
+    setSpeechResult(await api(`/files/${data.fileId}/speech-result`))
+    setNotice('语音文件已上传并处理')
+  }
+
+  function showImageComingSoon() {
+    setNotice('图片问诊功能正在开发中')
   }
 
   async function runSafetyCheck() {
@@ -199,7 +217,7 @@ function App() {
           <div>
             <p className="eyebrow">XuenWu Health</p>
             <h1>多模态健康问诊系统</h1>
-            <p className="muted">登录后可测试健康档案、文本问诊、图片分析、语音识别、风险提示和管理端数据。</p>
+            <p className="muted">登录后可测试健康档案、文本问诊、语音识别、风险提示和管理端数据。</p>
           </div>
           <form onSubmit={handleLogin} className="stack">
             <label>
@@ -220,7 +238,7 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell care-${careMode}`}>
       <aside className="sidebar">
         <div>
           <p className="eyebrow">XuenWu Health</p>
@@ -266,39 +284,82 @@ function App() {
 
         {activeView === 'consultation' && (
           <section className="grid two">
-            <div className="panel">
+            <div className="panel consultation-input">
               <h2>多模态问诊</h2>
+              <div className="mode-toolbar">
+                <div>
+                  <span className="field-label">问诊模式</span>
+                  <div className="segmented-control">
+                    {[
+                      ['standard', '普通'],
+                      ['child', '儿童'],
+                      ['elder', '老人']
+                    ].map(([value, label]) => (
+                      <button key={value} className={careMode === value ? 'selected' : ''} onClick={() => changeCareMode(value)}>{label}</button>
+                    ))}
+                  </div>
+                </div>
+                <label>
+                  回复语言
+                  <select value={outputLanguage} onChange={(event) => setOutputLanguage(event.target.value)}>
+                    <option value="zh-CN">中文</option>
+                    <option value="zh-CN,en">中英双语</option>
+                  </select>
+                </label>
+              </div>
+
+              <details className="guided-assessment">
+                <summary>症状自查向导</summary>
+                <div className="guided-grid">
+                  <label>不适部位<select value={guidedInput.bodyPart} onChange={(event) => setGuidedInput({ ...guidedInput, bodyPart: event.target.value })}>
+                    {['头部', '胸部', '腹部', '背部', '上肢', '下肢', '皮肤', '咽喉'].map((item) => <option key={item}>{item}</option>)}
+                  </select></label>
+                  <label>主要症状<select value={guidedInput.symptom} onChange={(event) => setGuidedInput({ ...guidedInput, symptom: event.target.value })}>
+                    {['疼痛', '瘙痒', '肿胀', '红疹', '发热', '麻木', '头晕', '咳嗽'].map((item) => <option key={item}>{item}</option>)}
+                  </select></label>
+                  <label>持续时间<select value={guidedInput.duration} onChange={(event) => setGuidedInput({ ...guidedInput, duration: event.target.value })}>
+                    {['1小时内', '1天', '2天', '3-7天', '1-4周', '1个月以上'].map((item) => <option key={item}>{item}</option>)}
+                  </select></label>
+                  <label>严重程度<select value={guidedInput.severity} onChange={(event) => setGuidedInput({ ...guidedInput, severity: event.target.value })}>
+                    <option>轻度，不影响活动</option><option>中度，影响部分日常活动</option><option>重度，无法正常活动</option>
+                  </select></label>
+                  <label className="guided-wide">伴随症状<select value={guidedInput.accompanying} onChange={(event) => setGuidedInput({ ...guidedInput, accompanying: event.target.value })}>
+                    <option>无明显伴随症状</option><option>伴随发热</option><option>伴随恶心或呕吐</option><option>伴随肿胀或出血</option><option>伴随呼吸困难</option>
+                  </select></label>
+                  <button className="secondary" onClick={applyGuidedAssessment}>生成症状描述</button>
+                </div>
+              </details>
               <label>
                 会话标题
                 <input value={sessionTitle} onChange={(e) => setSessionTitle(e.target.value)} />
               </label>
               <label>
                 症状描述
-                <textarea rows="5" value={chatText} onChange={(e) => setChatText(e.target.value)} />
+                <textarea rows="5" value={chatText} onChange={(e) => {
+                  setChatText(e.target.value)
+                  setGuidedApplied(false)
+                }} />
               </label>
               <div className="actions">
                 <button onClick={createSession}>新建会话</button>
                 <button onClick={sendText}>发送问诊</button>
                 <button className="secondary" onClick={runSafetyCheck}>风险检查</button>
               </div>
-              <div className="upload-row">
-                <label>
-                  图片
-                  <input type="file" accept="image/*" onChange={(e) => setSelectedImage(e.target.files?.[0])} />
-                </label>
-                <button className="secondary" onClick={() => uploadFile('image')}>上传图片</button>
-              </div>
+              <button className="secondary feature-pending" onClick={showImageComingSoon}>图片问诊（开发中）</button>
               <div className="upload-row">
                 <label>
                   语音
                   <input type="file" accept="audio/*" onChange={(e) => setSelectedAudio(e.target.files?.[0])} />
                 </label>
-                <button className="secondary" onClick={() => uploadFile('voice')}>上传语音</button>
+                <button className="secondary" onClick={uploadVoice}>上传语音</button>
               </div>
             </div>
 
-            <div className="panel">
-              <h2>会话结果</h2>
+            <div className="panel consultation-results">
+              <div className="section-head">
+                <h2>会话结果</h2>
+                <button className="secondary print-button" onClick={() => window.print()}>打印问诊报告</button>
+              </div>
               <div className="chat-box">
                 {messages.length === 0 && <p className="muted">还没有消息，先新建会话或发送问诊。</p>}
                 {messages.map((message, index) => (
@@ -311,7 +372,6 @@ function App() {
               </div>
               {consultationAnalysis && <ConsultationAnalysis analysis={consultationAnalysis} />}
               {!consultationAnalysis && riskResult && <Result title="风险提示" data={riskResult} />}
-              {imageResult && <ImageAnalysisStatus result={imageResult} />}
               {speechResult && <Result title="语音识别" data={speechResult} />}
             </div>
           </section>
@@ -429,21 +489,6 @@ function ConsultationAnalysis({ analysis }) {
         <h3>医生摘要</h3>
         <p>{analysis.doctorSummary || analysis.summary?.doctorSummary || '尚未生成摘要'}</p>
       </div>
-    </section>
-  )
-}
-
-function ImageAnalysisStatus({ result }) {
-  const failed = result.success === false
-  return (
-    <section className={`image-status ${failed ? 'unavailable' : 'available'}`}>
-      <div className="image-status-head">
-        <strong>{failed ? '图片暂未分析' : '图片分析完成'}</strong>
-        <span>{result.errorCode || result.imageCategory || '完成'}</span>
-      </div>
-      <p>{result.userMessage || result.findings}</p>
-      {!failed && result.findings && <p className="image-finding">{result.findings}</p>}
-      <small>{result.safetyNote}</small>
     </section>
   )
 }

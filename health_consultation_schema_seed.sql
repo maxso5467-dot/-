@@ -236,6 +236,17 @@ CREATE TABLE doctor_reviews (
   CONSTRAINT fk_review_doctor FOREIGN KEY (doctor_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
 
+CREATE TABLE wechat_accounts (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL UNIQUE,
+  openid VARCHAR(128) NOT NULL UNIQUE,
+  unionid VARCHAR(128),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_wechat_unionid (unionid),
+  CONSTRAINT fk_wechat_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB;
+
 INSERT INTO roles (code, name, description) VALUES
 ('user', '普通用户', '进行健康问诊和档案管理'),
 ('doctor', '医生顾问', '查看问诊并提供人工建议'),

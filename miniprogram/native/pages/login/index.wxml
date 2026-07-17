@@ -1,0 +1,12 @@
+<view class="page login-page">
+  <text class="brand">XUENWU HEALTH</text>
+  <view class="title">随时问，安心看</view>
+  <text class="subtitle">结构化症状整理、连续追问、风险提示与就医建议。</text>
+  <view class="panel">
+    <view class="field"><text class="label">用户名</text><input class="input" value="{{username}}" bindinput="onUsername" /></view>
+    <view class="field"><text class="label">密码</text><input class="input" password value="{{password}}" bindinput="onPassword" /></view>
+    <button class="primary" loading="{{loading}}" bindtap="login">登录</button>
+    <button class="secondary" loading="{{loading}}" bindtap="wechatLogin">微信快捷登录</button>
+    <view class="muted">开发测试账号：zhangsan / 123456</view>
+  </view>
+</view>

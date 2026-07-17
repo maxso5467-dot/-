@@ -1,0 +1,12 @@
+USE multimodal_health_consultation;
+
+CREATE TABLE IF NOT EXISTS wechat_accounts (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL UNIQUE,
+  openid VARCHAR(128) NOT NULL UNIQUE,
+  unionid VARCHAR(128),
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_wechat_unionid (unionid),
+  CONSTRAINT fk_wechat_user FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB;

@@ -1,0 +1,2 @@
+.login-page { padding-top: 90rpx; }
+.login-page .panel { margin-top: 50rpx; }

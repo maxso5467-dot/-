@@ -1,0 +1,1 @@
+<view class="page"><view class="section-title">问诊记录</view><view wx:if="{{loading}}" class="muted">正在加载...</view><view wx:elif="{{!items.length}}" class="panel muted">暂无问诊记录</view><view wx:for="{{items}}" wx:key="id" class="panel"><view class="section-title">{{item.title || '健康咨询'}}</view><text class="muted">{{item.status || '已完成'}}</text></view></view>

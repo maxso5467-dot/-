@@ -1,0 +1,1 @@
+Page({ data: { name: '用户' }, onShow() { const user = wx.getStorageSync('health_user'); this.setData({ name: user?.displayName || user?.username || '用户' }) }, consult() { wx.switchTab({ url: '/pages/consultation/index' }) }, profile() { wx.switchTab({ url: '/pages/profile/index' }) } })

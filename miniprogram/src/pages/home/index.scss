@@ -1,0 +1,7 @@
+.status-strip { display: flex; justify-content: space-around; margin: 28px 0; padding: 24px 12px; border-radius: 12px; background: #173a34; color: #fff; }
+.status-strip > view { display: flex; flex-direction: column; align-items: center; }
+.status-value { font-size: 34px; font-weight: 800; }
+.status-label { margin-top: 6px; color: #b9d4cc; font-size: 22px; }
+.action-panel { border-left: 8px solid #277a68; }
+.action-title,.session-title { display: block; margin-bottom: 8px; font-weight: 750; }
+.session-row { display: flex; justify-content: space-between; padding: 18px 0; border-bottom: 1px solid #e4ebe8; }
