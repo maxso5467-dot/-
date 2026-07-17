@@ -11,6 +11,10 @@ const path = require('path');
 const app = express();
 const port = Number(process.env.PORT || 8080);
 const jwtSecret = process.env.JWT_SECRET || 'local-dev-health-secret';
+const aiProvider = String(process.env.AI_PROVIDER || (process.env.DEEPSEEK_API_KEY ? 'deepseek' : 'openai')).toLowerCase();
+const deepseekApiKey = process.env.DEEPSEEK_API_KEY || '';
+const deepseekModel = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const deepseekBaseUrl = String(process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const openaiApiKey = process.env.OPENAI_API_KEY || '';
 const openaiModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const uploadDir = path.join(__dirname, '..', 'uploads');
@@ -64,6 +68,13 @@ async function getOne(sql, params = []) {
   return rows[0] || null;
 }
 
+async function getOwnedSession(sessionId, userId) {
+  return getOne(
+    'SELECT * FROM consultation_sessions WHERE id = ? AND user_id = ?',
+    [sessionId, userId]
+  );
+}
+
 function signToken(user) {
   return jwt.sign(
     { id: user.id, username: user.username, roleCode: user.role_code || user.roleCode },
@@ -104,20 +115,17 @@ function pageArgs(req, defaultPageSize = 10) {
 
 app.get('/api/v1/health', asyncRoute(async (_req, res) => {
   const row = await getOne('SELECT VERSION() AS mysql_version');
+  const ai = getAiStatus();
   res.json(ok({
     status: 'ok',
     mysqlVersion: row.mysql_version,
-    aiProvider: openaiApiKey ? 'openai' : 'local-rule-fallback',
-    aiModel: openaiApiKey ? openaiModel : null
+    aiProvider: ai.provider,
+    aiModel: ai.model
   }));
 }));
 
 app.get('/api/v1/ai/status', auth, asyncRoute(async (_req, res) => {
-  res.json(ok({
-    provider: openaiApiKey ? 'openai' : 'local-rule-fallback',
-    model: openaiApiKey ? openaiModel : null,
-    realAiEnabled: Boolean(openaiApiKey)
-  }));
+  res.json(ok(getAiStatus()));
 }));
 
 app.post('/api/v1/auth/register', asyncRoute(async (req, res) => {
@@ -294,53 +302,250 @@ app.get('/api/v1/consultations', auth, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/v1/consultations/:id', auth, asyncRoute(async (req, res) => {
-  const session = await getOne('SELECT * FROM consultation_sessions WHERE id = ?', [req.params.id]);
+  const session = await getOwnedSession(req.params.id, req.user.id);
   if (!session) return res.status(404).json(fail('Consultation not found', 404));
   const messages = await query('SELECT * FROM consultation_messages WHERE session_id = ? ORDER BY id', [req.params.id]);
   const files = await query('SELECT * FROM uploaded_files WHERE session_id = ? ORDER BY id', [req.params.id]);
-  res.json(ok({ ...toCamel(session), messages: messages.map(toCamel), files: files.map(toCamel) }));
+  const symptoms = await query('SELECT * FROM symptom_extractions WHERE session_id = ? ORDER BY id', [req.params.id]);
+  const followUpQuestions = await query(
+    'SELECT * FROM follow_up_questions WHERE session_id = ? ORDER BY priority, id',
+    [req.params.id]
+  );
+  const latestSummary = await getOne(
+    'SELECT * FROM consultation_summaries WHERE session_id = ? ORDER BY version DESC LIMIT 1',
+    [req.params.id]
+  );
+  const latestRisk = await getOne(
+    'SELECT * FROM risk_assessments WHERE session_id = ? ORDER BY id DESC LIMIT 1',
+    [req.params.id]
+  );
+  const summaryData = latestSummary ? toCamel(latestSummary) : null;
+  const riskData = latestRisk ? toCamel(latestRisk) : null;
+  const questionProgress = await getQuestionProgress(req.params.id);
+  res.json(ok({
+    ...toCamel(session),
+    messages: messages.map(toCamel),
+    files: files.map(toCamel),
+    analysis: {
+      symptoms: symptoms.map((row) => {
+        const item = toCamel(row);
+        return {
+          name: item.symptomName,
+          bodyPart: item.bodyPart,
+          onset: item.onsetText,
+          duration: item.durationText,
+          severity: item.severity,
+          frequency: item.frequencyText,
+          confidence: Number(item.confidence)
+        };
+      }),
+      followUpQuestions: followUpQuestions.map((row) => {
+        const item = toCamel(row);
+        return {
+          id: item.id,
+          question: item.questionText,
+          field: item.targetField,
+          priority: item.priority,
+          status: item.status
+        };
+      }),
+      questionProgress,
+      summary: summaryData,
+      recommendations: parseJsonValue(summaryData?.recommendations, []),
+      doctorSummary: summaryData?.doctorSummary || null,
+      risk: riskData ? {
+        level: riskData.riskLevel,
+        reasons: parseJsonValue(riskData.triggers, []),
+        department: summaryData?.suggestedDepartment || session.recommended_department,
+        action: riskData.recommendation
+      } : null
+    }
+  }));
 }));
 
 app.post('/api/v1/consultations/:id/messages/text', auth, asyncRoute(async (req, res) => {
-  const content = req.body.content || '';
-  await query(
+  const content = String(req.body.content || '').trim();
+  if (!content) return res.status(400).json(fail('content is required'));
+  const session = await getOwnedSession(req.params.id, req.user.id);
+  if (!session) return res.status(404).json(fail('Consultation not found', 404));
+
+  const userMessage = await query(
     `INSERT INTO consultation_messages (session_id, sender_type, input_type, content, structured_json)
      VALUES (?, 'user', 'text', ?, ?)`,
     [req.params.id, content, JSON.stringify(req.body.context || {})]
   );
-  const risk = inferRisk(content);
+  const pendingQuestions = await query(
+    `SELECT id, question_text, target_field, priority
+     FROM follow_up_questions
+     WHERE session_id = ? AND status = 'pending'
+     ORDER BY priority, id`,
+    [req.params.id]
+  );
+  const ruleRisk = inferRisk(content);
   const aiStarted = Date.now();
   const aiResult = await buildAssistantReply({
     sessionId: req.params.id,
     userId: req.user.id,
     content,
-    risk
+    risk: ruleRisk,
+    pendingQuestions: pendingQuestions.map(toCamel)
   });
-  const assistantText = aiResult.text;
-  const result = await query(
-    `INSERT INTO consultation_messages (session_id, sender_type, input_type, content, structured_json)
-     VALUES (?, 'assistant', 'text', ?, ?)`,
-    [req.params.id, assistantText, JSON.stringify({
-      riskLevel: risk.level,
-      recommendation: risk.recommendation,
-      aiProvider: aiResult.provider,
-      aiModel: aiResult.model
-    })]
-  );
+  const analysis = normalizeConsultationAnalysis(aiResult.analysis, content, ruleRisk, pendingQuestions.map(toCamel));
+  const connection = await pool.getConnection();
+  let assistantMessageId;
+  try {
+    await connection.beginTransaction();
+    const [assistantMessage] = await connection.execute(
+      `INSERT INTO consultation_messages (session_id, sender_type, input_type, content, structured_json)
+       VALUES (?, 'assistant', 'text', ?, ?)`,
+      [req.params.id, analysis.reply, JSON.stringify({
+        ...analysis,
+        aiProvider: aiResult.provider,
+        aiModel: aiResult.model
+      })]
+    );
+    assistantMessageId = assistantMessage.insertId;
+
+    if (analysis.answeredQuestionIds.length) {
+      const placeholders = analysis.answeredQuestionIds.map(() => '?').join(',');
+      await connection.execute(
+        `UPDATE follow_up_questions
+         SET status = 'answered', answer_message_id = ?, answered_at = NOW()
+         WHERE session_id = ? AND status = 'pending' AND id IN (${placeholders})`,
+        [userMessage.insertId, req.params.id, ...analysis.answeredQuestionIds]
+      );
+    }
+
+    for (const symptom of analysis.symptoms) {
+      await connection.execute(
+        `INSERT INTO symptom_extractions
+          (session_id, message_id, symptom_name, body_part, onset_text, duration_text, severity, frequency_text, confidence, source_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'text')`,
+        [
+          req.params.id,
+          userMessage.insertId,
+          symptom.name,
+          symptom.bodyPart || null,
+          symptom.onset || null,
+          symptom.duration || null,
+          symptom.severity,
+          symptom.frequency || null,
+          symptom.confidence
+        ]
+      );
+    }
+
+    for (const question of analysis.followUpQuestions) {
+      const [duplicateRows] = await connection.execute(
+        `SELECT id FROM follow_up_questions
+         WHERE session_id = ? AND status = 'pending'
+           AND (question_text = ? OR (target_field IS NOT NULL AND target_field = ?))
+         LIMIT 1`,
+        [req.params.id, question.question, question.field || null]
+      );
+      if (!duplicateRows.length) {
+        await connection.execute(
+          `INSERT INTO follow_up_questions
+            (session_id, source_message_id, question_text, target_field, priority)
+           VALUES (?, ?, ?, ?, ?)`,
+          [req.params.id, assistantMessageId, question.question, question.field || null, question.priority]
+        );
+      }
+    }
+
+    await connection.execute(
+      `INSERT INTO risk_assessments (session_id, risk_level, triggers, recommendation, need_offline_care)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        req.params.id,
+        analysis.risk.level,
+        JSON.stringify(analysis.risk.reasons),
+        analysis.risk.action,
+        ['medium', 'high', 'emergency'].includes(analysis.risk.level)
+      ]
+    );
+
+    const [versionRows] = await connection.execute(
+      'SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM consultation_summaries WHERE session_id = ?',
+      [req.params.id]
+    );
+    await connection.execute(
+      `INSERT INTO consultation_summaries
+        (session_id, source_message_id, version, symptom_summary, user_summary, doctor_summary, recommendations, suggested_department, generated_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        req.params.id,
+        assistantMessageId,
+        versionRows[0].next_version,
+        analysis.symptoms.map((item) => `${item.bodyPart ? `${item.bodyPart} ` : ''}${item.name}`).join('、') || content,
+        analysis.reply,
+        analysis.doctorSummary,
+        JSON.stringify(analysis.recommendations),
+        analysis.risk.department,
+        aiResult.provider === 'openai' ? 'ai' : 'system'
+      ]
+    );
+
+    await connection.execute(
+      `UPDATE consultation_sessions
+       SET risk_level = ?, recommended_department = ?, summary = ?, updated_at = NOW()
+       WHERE id = ?`,
+      [analysis.risk.level, analysis.risk.department, analysis.doctorSummary, req.params.id]
+    );
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+
   await query(
     `INSERT INTO model_call_logs (session_id, provider, model_name, capability, latency_ms, success, error_message)
      VALUES (?, ?, ?, 'llm', ?, ?, ?)`,
     [req.params.id, aiResult.provider, aiResult.model || 'none', Date.now() - aiStarted, aiResult.success, aiResult.error || null]
   );
-  await query(
-    `UPDATE consultation_sessions SET risk_level = ?, recommended_department = COALESCE(recommended_department, ?), updated_at = NOW() WHERE id = ?`,
-    [risk.level, risk.department, req.params.id]
-  );
-  res.status(201).json(ok({ messageId: result.insertId, reply: assistantText, risk, ai: aiResult }));
+  const questionProgress = await getQuestionProgress(req.params.id);
+  res.status(201).json(ok({
+    userMessageId: userMessage.insertId,
+    messageId: assistantMessageId,
+    reply: analysis.reply,
+    analysis: { ...analysis, questionProgress },
+    risk: analysis.risk,
+    ai: {
+      provider: aiResult.provider,
+      model: aiResult.model,
+      success: aiResult.success,
+      error: aiResult.error || null
+    }
+  }));
 }));
+
+async function getQuestionProgress(sessionId) {
+  const rows = await query(
+    `SELECT status, COUNT(*) AS total
+     FROM follow_up_questions WHERE session_id = ? GROUP BY status`,
+    [sessionId]
+  );
+  const counts = Object.fromEntries(rows.map((row) => [row.status, Number(row.total)]));
+  return {
+    answered: counts.answered || 0,
+    pending: counts.pending || 0,
+    skipped: counts.skipped || 0,
+    total: rows.reduce((sum, row) => sum + Number(row.total), 0)
+  };
+}
 
 app.post('/api/v1/consultations/:id/messages/image', auth, upload.single('file'), asyncRoute(async (req, res) => {
   const file = req.file;
+  if (!file) return res.status(400).json(fail('请选择图片文件'));
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)) {
+    fs.unlink(file.path, () => {});
+    return res.status(400).json({
+      ...fail('仅支持 JPEG、PNG 或 WebP 图片'),
+      errorCode: 'INVALID_IMAGE'
+    });
+  }
   const result = await query(
     `INSERT INTO uploaded_files (user_id, session_id, file_type, original_name, storage_url, mime_type, file_size_bytes, status)
      VALUES (?, ?, 'image', ?, ?, ?, ?, 'analyzed')`,
@@ -514,35 +719,70 @@ app.put('/api/v1/admin/safety-rules', auth, asyncRoute(async (req, res) => {
 }));
 
 function inferRisk(text) {
-  const emergencyWords = ['胸痛', '呼吸困难', '意识障碍', '大出血', '严重过敏', '卒中', '中风'];
-  if (emergencyWords.some((word) => text.includes(word))) {
+  const emergencyWords = ['胸痛', '呼吸困难', '意识障碍', '昏迷', '大出血', '严重过敏', '卒中', '中风', '自杀', '自伤'];
+  const emergencyTriggers = emergencyWords.filter((word) => hasAffirmedKeyword(text, word));
+  if (emergencyTriggers.length) {
     return {
       level: 'emergency',
       department: '急诊科',
+      triggers: emergencyTriggers,
       recommendation: '出现紧急危险信号，建议立即拨打急救电话或前往急诊。'
     };
   }
-  if (['发热', '疼痛', '渗液', '扩散', '红肿'].some((word) => text.includes(word))) {
+  const highRules = [
+    { label: '无法正常行走', pattern: /(无法|不能).{0,4}(行走|走路)/ },
+    { label: '不能正常负重', pattern: /(无法|不能).{0,4}负重/ },
+    { label: '高烧不退', pattern: /高烧.{0,4}不退/ },
+    { label: '持续呕吐', pattern: /持续.{0,2}呕吐/ },
+    { label: '明显畸形', pattern: /明显.{0,2}畸形/ }
+  ];
+  const highTriggers = highRules.filter((rule) => rule.pattern.test(text)).map((rule) => rule.label);
+  if (highTriggers.length) {
+    return {
+      level: 'high',
+      department: '急诊科',
+      triggers: highTriggers,
+      recommendation: '存在较高风险信号，建议尽快前往线下医疗机构评估。'
+    };
+  }
+  const mediumWords = ['发热', '疼痛', '疼', '渗液', '扩散', '红肿', '红疹', '很痒', '肿胀'];
+  const mediumTriggers = mediumWords.filter((word) => text.includes(word));
+  if (mediumTriggers.length) {
     return {
       level: 'medium',
-      department: '全科',
+      department: text.includes('红疹') || text.includes('皮疹') ? '皮肤科' : '全科',
+      triggers: mediumTriggers,
       recommendation: '建议补充症状信息并考虑线下就医评估。'
     };
   }
   return {
     level: 'low',
     department: '全科',
+    triggers: ['未发现明确危险关键词'],
     recommendation: '建议继续观察，若症状加重或持续不缓解，请及时就医。'
   };
 }
 
-async function buildAssistantReply({ sessionId, userId, content, risk }) {
-  if (!openaiApiKey) {
+function hasAffirmedKeyword(text, keyword) {
+  let index = text.indexOf(keyword);
+  while (index >= 0) {
+    const prefix = text.slice(Math.max(0, index - 6), index);
+    if (!/(没有|无|未见|并无|否认|不伴|未出现|不存在)\s*$/.test(prefix)) {
+      return true;
+    }
+    index = text.indexOf(keyword, index + keyword.length);
+  }
+  return false;
+}
+
+async function buildAssistantReply({ sessionId, userId, content, risk, pendingQuestions = [] }) {
+  const providerKey = aiProvider === 'deepseek' ? deepseekApiKey : openaiApiKey;
+  if (!providerKey) {
     return {
       provider: 'local-rule-fallback',
       model: null,
       success: true,
-      text: `当前未配置 OPENAI_API_KEY，因此这是本地规则回复，不是真正 AI。${risk.recommendation} 本系统仅提供健康咨询辅助，不能替代医生诊断。`
+      analysis: buildLocalConsultationAnalysis(content, risk, undefined, pendingQuestions)
     };
   }
 
@@ -555,7 +795,13 @@ async function buildAssistantReply({ sessionId, userId, content, risk }) {
     );
     const prompt = [
       '你是一个中文多模态健康问诊助手，只提供健康咨询、症状整理、风险提示和就医建议，不做确诊。',
-      '回答必须包含：1. 对用户描述的理解；2. 需要追问的关键信息；3. 可能风险；4. 居家观察建议；5. 何时线下就医。',
+      '只输出一个合法 JSON 对象，不要使用 Markdown 代码块。',
+      'JSON 字段必须包含 reply, symptoms, followUpQuestions, risk, recommendations, doctorSummary。',
+      'symptoms 每项包含 name, bodyPart, onset, duration, severity, frequency, confidence。',
+      'severity 只能是 mild, moderate, severe, unknown；confidence 是 0 到 1。',
+      'followUpQuestions 每项包含 question, field, priority，最多3项。',
+      'answeredQuestionIds 是用户本次输入已经回答的待回答问题ID数组；只能从给出的待回答问题ID中选择。',
+      'risk 包含 level, reasons, department, action；level 只能是 low, medium, high, emergency。',
       '如果出现胸痛、呼吸困难、意识障碍、大出血、严重过敏、疑似卒中等危险信号，必须明确建议立即急诊或拨打急救电话。',
       '不要编造检查结果，不要给出处方剂量，不要说“你就是某某病”。',
       '',
@@ -563,42 +809,222 @@ async function buildAssistantReply({ sessionId, userId, content, risk }) {
       `规则建议：${risk.recommendation}`,
       `健康档案：${JSON.stringify(toCamel(profile) || {})}`,
       `最近对话：${JSON.stringify(history.reverse().map(toCamel))}`,
+      `当前待回答问题：${JSON.stringify(pendingQuestions)}`,
       `用户最新描述：${content}`
     ].join('\n');
 
-    const response = await fetch('https://api.openai.com/v1/responses', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${openaiApiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: openaiModel,
-        input: prompt,
-        temperature: 0.2,
-        max_output_tokens: 700
+    const response = aiProvider === 'deepseek'
+      ? await fetch(`${deepseekBaseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${deepseekApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: deepseekModel,
+          messages: [
+            { role: 'system', content: '你是健康问诊辅助系统，必须严格输出合法JSON。' },
+            { role: 'user', content: prompt }
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.2,
+          max_tokens: 1200
+        })
       })
-    });
+      : await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${openaiApiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: openaiModel,
+          input: prompt,
+          temperature: 0.2,
+          max_output_tokens: 700
+        })
+      });
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.error?.message || `OpenAI request failed: ${response.status}`);
+      throw new Error(data.error?.message || `${aiProvider} request failed: ${response.status}`);
     }
-    const text = extractResponseText(data);
+    const text = aiProvider === 'deepseek'
+      ? String(data.choices?.[0]?.message?.content || '').trim()
+      : extractResponseText(data);
+    const analysis = parseJsonObject(text);
+    if (!analysis.reply || !analysis.risk) {
+      throw new Error('AI output is not valid structured consultation JSON');
+    }
     return {
-      provider: 'openai',
-      model: openaiModel,
+      provider: aiProvider,
+      model: aiProvider === 'deepseek' ? deepseekModel : openaiModel,
       success: true,
-      text: text || `AI 没有返回有效文本。${risk.recommendation}`
+      analysis
     };
   } catch (error) {
     return {
-      provider: 'openai',
-      model: openaiModel,
+      provider: aiProvider,
+      model: aiProvider === 'deepseek' ? deepseekModel : openaiModel,
       success: false,
       error: error.message,
-      text: `AI 调用失败，已降级为本地安全回复：${risk.recommendation} 本系统仅提供健康咨询辅助，不能替代医生诊断。`
+      analysis: buildLocalConsultationAnalysis(content, risk, 'AI调用失败，已使用本地结构化规则。', pendingQuestions)
     };
   }
+}
+
+function getAiStatus() {
+  if (aiProvider === 'deepseek' && deepseekApiKey) {
+    return {
+      provider: 'deepseek',
+      model: deepseekModel,
+      realAiEnabled: true,
+      textEnabled: true,
+      visionEnabled: Boolean(openaiApiKey)
+    };
+  }
+  if (aiProvider === 'openai' && openaiApiKey) {
+    return {
+      provider: 'openai',
+      model: openaiModel,
+      realAiEnabled: true,
+      textEnabled: true,
+      visionEnabled: true
+    };
+  }
+  return {
+    provider: 'local-rule-fallback',
+    model: null,
+    realAiEnabled: false,
+    textEnabled: false,
+    visionEnabled: false
+  };
+}
+
+function buildLocalConsultationAnalysis(
+  content,
+  risk,
+  prefix = '当前未配置所选AI服务的API密钥，以下为本地结构化规则结果。',
+  pendingQuestions = []
+) {
+  const symptom = inferSymptom(content);
+  const answeredQuestionIds = inferAnsweredQuestionIds(content, pendingQuestions);
+  const questions = [];
+  if (!/[0-9一二两三四五六七八九十半]+\s*(分钟|小时|天|周|月|年)/.test(content)) {
+    questions.push({ question: '症状持续多长时间了？', field: 'duration', priority: 1 });
+  }
+  if (!/(轻微|轻度|明显|严重|剧烈|[0-9一二三四五六七八九十]分)/.test(content)) {
+    questions.push({ question: '症状程度如何，是否影响睡眠、行走或日常活动？', field: 'severity', priority: 2 });
+  }
+  if (!/(发热|发烧|呼吸困难|出血|渗液|肿胀|无发热|没有发热)/.test(content)) {
+    questions.push({ question: '是否伴有发热、肿胀、出血、渗液或呼吸困难？', field: 'red_flags', priority: 3 });
+  }
+  return {
+    reply: `${prefix}${risk.recommendation} 本系统仅提供健康咨询辅助，不能替代医生诊断。`,
+    answeredQuestionIds,
+    symptoms: [symptom],
+    followUpQuestions: questions.slice(0, 3),
+    risk: {
+      level: risk.level,
+      reasons: risk.triggers || [symptom.name],
+      department: risk.department,
+      action: risk.recommendation
+    },
+    recommendations: risk.level === 'emergency'
+      ? ['停止等待线上回复，立即联系急救服务或前往急诊']
+      : ['记录症状变化', '避免诱发或加重症状的活动', risk.recommendation],
+    doctorSummary: `用户描述：${content}。规则风险等级：${risk.level}，建议科室：${risk.department}。`
+  };
+}
+
+function inferAnsweredQuestionIds(content, pendingQuestions) {
+  const fieldPatterns = {
+    duration: /[0-9一二两三四五六七八九十半]+\s*(分钟|小时|天|周|月|年)/,
+    severity: /(轻微|轻度|明显|严重|剧烈|不影响|影响|无法|不能|[0-9一二三四五六七八九十]分)/,
+    red_flags: /(发热|发烧|呼吸困难|出血|渗液|肿胀|没有|无|否认|不伴)/
+  };
+  return pendingQuestions
+    .filter((question) => fieldPatterns[question.targetField]?.test(content))
+    .map((question) => Number(question.id));
+}
+
+function inferSymptom(content) {
+  const symptomRules = [
+    ['红疹', '皮疹'],
+    ['瘙痒', '瘙痒'],
+    ['痒', '瘙痒'],
+    ['疼痛', '疼痛'],
+    ['疼', '疼痛'],
+    ['发热', '发热'],
+    ['发烧', '发热'],
+    ['咳嗽', '咳嗽'],
+    ['头晕', '头晕'],
+    ['恶心', '恶心'],
+    ['腹泻', '腹泻'],
+    ['胸闷', '胸闷'],
+    ['呼吸困难', '呼吸困难']
+  ];
+  const bodyParts = ['头', '眼', '耳', '鼻', '咽', '喉', '胸', '腹', '腰', '背', '手', '手臂', '大腿', '小腿', '脚', '皮肤'];
+  const symptomName = symptomRules.find(([keyword]) => content.includes(keyword))?.[1] || '身体不适';
+  const bodyPart = bodyParts.find((item) => content.includes(item)) || null;
+  const duration = content.match(/[0-9一二两三四五六七八九十半]+\s*(?:分钟|小时|天|周|月|年)/)?.[0] || null;
+  const severe = /(严重|剧烈|无法|不能|大出血)/.test(content);
+  const moderate = /(明显|加重|影响|很痒|很疼)/.test(content);
+  return {
+    name: symptomName,
+    bodyPart,
+    onset: /(运动后|饭后|睡醒后|用药后|接触后)/.exec(content)?.[0] || null,
+    duration,
+    severity: severe ? 'severe' : moderate ? 'moderate' : 'unknown',
+    frequency: /(持续|反复|偶尔|间歇)/.exec(content)?.[0] || null,
+    confidence: symptomName === '身体不适' ? 0.45 : 0.75
+  };
+}
+
+function normalizeConsultationAnalysis(raw, content, ruleRisk, pendingQuestions = []) {
+  const fallback = buildLocalConsultationAnalysis(content, ruleRisk, undefined, pendingQuestions);
+  const riskOrder = { low: 0, medium: 1, high: 2, emergency: 3 };
+  const aiRiskLevel = Object.hasOwn(riskOrder, raw?.risk?.level) ? raw.risk.level : 'low';
+  const finalRiskLevel = riskOrder[ruleRisk.level] >= riskOrder[aiRiskLevel] ? ruleRisk.level : aiRiskLevel;
+  const symptoms = Array.isArray(raw?.symptoms) && raw.symptoms.length ? raw.symptoms : fallback.symptoms;
+  const questions = Array.isArray(raw?.followUpQuestions) ? raw.followUpQuestions : fallback.followUpQuestions;
+  const validPendingIds = new Set(pendingQuestions.map((item) => Number(item.id)));
+  return {
+    reply: String(raw?.reply || fallback.reply),
+    answeredQuestionIds: (Array.isArray(raw?.answeredQuestionIds)
+      ? raw.answeredQuestionIds
+      : fallback.answeredQuestionIds
+    ).map(Number).filter((id) => validPendingIds.has(id)),
+    symptoms: symptoms.slice(0, 10).map((item) => ({
+      name: String(item.name || '身体不适').slice(0, 100),
+      bodyPart: item.bodyPart ? String(item.bodyPart).slice(0, 100) : null,
+      onset: item.onset ? String(item.onset).slice(0, 100) : null,
+      duration: item.duration ? String(item.duration).slice(0, 100) : null,
+      severity: ['mild', 'moderate', 'severe', 'unknown'].includes(item.severity) ? item.severity : 'unknown',
+      frequency: item.frequency ? String(item.frequency).slice(0, 100) : null,
+      confidence: clampNumber(item.confidence, 0.5)
+    })),
+    followUpQuestions: questions.slice(0, 3).map((item, index) => ({
+      question: String(item.question || item).slice(0, 500),
+      field: item.field ? String(item.field).slice(0, 100) : null,
+      priority: Math.max(1, Math.min(9, Number(item.priority) || index + 1))
+    })),
+    risk: {
+      level: finalRiskLevel,
+      reasons: finalRiskLevel === ruleRisk.level
+        ? (ruleRisk.triggers || raw?.risk?.reasons || fallback.risk.reasons)
+        : (raw?.risk?.reasons || fallback.risk.reasons),
+      department: finalRiskLevel === ruleRisk.level
+        ? ruleRisk.department
+        : String(raw?.risk?.department || fallback.risk.department),
+      action: finalRiskLevel === ruleRisk.level
+        ? ruleRisk.recommendation
+        : String(raw?.risk?.action || fallback.risk.action)
+    },
+    recommendations: Array.isArray(raw?.recommendations) && raw.recommendations.length
+      ? raw.recommendations.slice(0, 6).map(String)
+      : fallback.recommendations,
+    doctorSummary: String(raw?.doctorSummary || fallback.doctorSummary)
+  };
 }
 
 function extractResponseText(data) {
@@ -615,14 +1041,21 @@ function extractResponseText(data) {
 
 async function analyzeImageWithAi({ sessionId, filePath, mimeType, description }) {
   if (!openaiApiKey) {
+    const unsupported = aiProvider === 'deepseek';
     return {
-      provider: 'local-rule-fallback',
+      provider: unsupported ? 'deepseek' : 'local-rule-fallback',
       model: null,
-      success: true,
+      success: false,
+      errorCode: unsupported ? 'UNSUPPORTED' : 'NOT_CONFIGURED',
+      userMessage: unsupported
+        ? '图片已上传，但当前 DeepSeek 文本模型不支持图片分析。请用文字补充图片中的部位、颜色、大小和变化情况。'
+        : '图片已上传，但尚未配置支持图片分析的AI服务。请补充文字描述后继续问诊。',
       imageCategory: 'unknown',
       qualityScore: 0.5,
-      findings: '当前未配置 OPENAI_API_KEY，因此图片只完成了上传记录，没有进行真实 AI 图像分析。',
-      confidence: 0.3,
+      findings: unsupported
+        ? '当前 DeepSeek 文本模型未执行图片内容分析。'
+        : '当前未配置视觉模型，未执行图片内容分析。',
+      confidence: 0,
       safetyNote: '图片分析仅作辅助，不能替代医生面诊。'
     };
   }
@@ -674,6 +1107,8 @@ async function analyzeImageWithAi({ sessionId, filePath, mimeType, description }
       provider: 'openai',
       model: openaiModel,
       success: true,
+      errorCode: null,
+      userMessage: '图片分析完成。',
       imageCategory: normalizeImageCategory(parsed.imageCategory),
       qualityScore: clampNumber(parsed.qualityScore, 0.75),
       findings: parsed.findings || text || 'AI 已分析图片，但未返回明确发现。',
@@ -681,11 +1116,16 @@ async function analyzeImageWithAi({ sessionId, filePath, mimeType, description }
       safetyNote: parsed.safetyNote || '图片分析仅作辅助，不能替代医生面诊。'
     };
   } catch (error) {
+    const networkError = error.name === 'TypeError' || /fetch|network|timeout|ECONN|ENOTFOUND/i.test(error.message);
     return {
       provider: 'openai',
       model: openaiModel,
       success: false,
       error: error.message,
+      errorCode: networkError ? 'NETWORK_ERROR' : 'MODEL_ERROR',
+      userMessage: networkError
+        ? '图片分析服务暂时无法连接，请稍后重试。图片已经保存，无需重复上传。'
+        : '图片分析服务处理失败，请稍后重试或改用文字描述。',
       imageCategory: 'unknown',
       qualityScore: 0.5,
       findings: `AI 图像分析失败：${error.message}`,
@@ -706,6 +1146,16 @@ function parseJsonObject(text) {
     } catch {
       return {};
     }
+  }
+}
+
+function parseJsonValue(value, fallback) {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
   }
 }
 

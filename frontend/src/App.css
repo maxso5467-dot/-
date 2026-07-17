@@ -257,6 +257,158 @@ textarea {
   border: 1px solid #d9e4df;
 }
 
+.analysis-board {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #d9e4df;
+}
+
+.analysis-head,
+.analysis-section dl div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.analysis-meta,
+.image-status-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.progress-text {
+  color: #5f706b;
+  font-size: 12px;
+}
+
+.risk-badge {
+  min-width: 76px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  background: #e8f3ee;
+  color: #285b4c;
+}
+
+.risk-badge.medium {
+  background: #fff2cc;
+  color: #765600;
+}
+
+.risk-badge.high {
+  background: #ffe0c2;
+  color: #8a3b00;
+}
+
+.risk-badge.emergency {
+  background: #ffe1e1;
+  color: #9d1515;
+}
+
+.analysis-section {
+  padding: 12px;
+  border: 1px solid #dfe8e4;
+  border-radius: 6px;
+  background: #fbfdfc;
+}
+
+.analysis-section h3 {
+  margin: 0 0 9px;
+  font-size: 14px;
+}
+
+.analysis-section p,
+.analysis-section ul,
+.analysis-section ol,
+.analysis-section dl {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.symptom-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+.symptom-item {
+  display: grid;
+  gap: 3px;
+  padding: 9px;
+  border-left: 3px solid #3d8b7a;
+  background: #eef6f3;
+}
+
+.symptom-item span {
+  color: #5c6d68;
+  font-size: 12px;
+}
+
+.question-list,
+.recommendation-list {
+  padding-left: 20px;
+}
+
+.analysis-section dl {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.analysis-section dt {
+  color: #63736f;
+}
+
+.analysis-section dd {
+  margin: 0;
+  text-align: right;
+}
+
+.doctor-summary {
+  border-left: 3px solid #4d79ad;
+}
+
+.image-status {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid #b8dacb;
+  border-left: 3px solid #277a68;
+  border-radius: 6px;
+  background: #f1f9f5;
+}
+
+.image-status.unavailable {
+  border-color: #ead39d;
+  border-left-color: #a97700;
+  background: #fff9eb;
+}
+
+.image-status-head {
+  justify-content: space-between;
+}
+
+.image-status-head span {
+  color: #6a746f;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.image-status p {
+  margin: 8px 0;
+  line-height: 1.55;
+}
+
+.image-status small {
+  color: #66746f;
+}
+
 pre {
   white-space: pre-wrap;
   word-break: break-word;
